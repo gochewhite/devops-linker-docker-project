@@ -1,0 +1,57 @@
+version: '3.9'  # Compose file format version
+
+# ------------------------------
+# Define all services for the app
+# ------------------------------
+services:
+
+  # ------------------------------
+  # PostgreSQL Database
+  # ------------------------------
+  postgres:
+    image: postgres:15-alpine        # Lightweight Postgres image
+    container_name: linker-postgres  # Friendly container name
+    restart: always                  # Always restart if container stops
+    environment:                     # Set environment variables for DB
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: linkerdb                 # Expose database port to host
+    volumes:
+      - postgres_data:/var/lib/postgresql/data  # Persist DB data
+
+  # ------------------------------
+  # Backend (NestJS API)
+  # ------------------------------
+  backend:
+    image: whiteobah/devops-bootcamp-linker-backend:latest  # Pull your backend from Docker Hub
+    container_name: linker-backend                     # Friendly container name
+    restart: always                                   # Auto-restart policy
+    depends_on:
+      - postgres                                      # Ensure Postgres starts first
+    environment:                                      # Pass environment variables
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/linkerdb?schema=public
+      PORT: 3001
+      NEXTAUTH_URL: http://localhost:3000
+      NEXTAUTH_SECRET: changeme
+    ports:
+      - "3001:3001"                                   # Expose backend port to host
+
+  # ------------------------------
+  # Frontend (Next.js)
+  # ------------------------------
+  frontend:
+    image: whiteobah/devops-bootcamp-linker-frontend:latest  # Pull your frontend from Docker Hub
+    container_name: linker-frontend                     # Friendly container name
+    restart: always                                   # Auto-restart policy
+    depends_on:
+      - backend                                      # Ensure backend starts first
+    environment:                                      # Pass environment variables
+      NEXT_PUBLIC_API_URL: http://backend:3001/api   # Frontend talks to backend by service name
+    ports:
+      - "3000:3000"                                   # Expose frontend port to host
+
+# ------------------------------
+# Volumes for persisting data
+# ------------------------------
+volumes:
+  postgres_data:  # Persist Postgres data between container restarts
