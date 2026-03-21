@@ -1,0 +1,89 @@
+# ---------- Stage 1: Install dependencies ----------
+
+# Use the official Node.js Alpine image as the base image for dependency installation
+FROM node:20-alpine AS deps
+
+# Set the working directory inside the container
+WORKDIR /app
+
+# Copy dependency definition files (package.json and package-lock.json)
+# These files describe the Node.js dependencies required by the application
+COPY package.json package-lock.json* ./
+
+# Install dependencies using npm ci
+# npm ci is faster and more reliable for production builds because it installs exactly what is in package-lock.json
+RUN npm ci
+
+
+# ---------- Stage 2: Build application ----------
+
+# Use the Node.js Alpine image again to build the application
+FROM node:20-alpine AS builder
+
+# Set the working directory inside the container
+WORKDIR /app
+
+# Copy the installed node_modules from the previous stage
+# This avoids reinstalling dependencies again and speeds up the build
+COPY --from=deps /app/node_modules ./node_modules
+
+# Copy the entire application source code into the container
+COPY . .
+
+# Define a build argument for the API URL used by the frontend
+ARG NEXT_PUBLIC_API_URL
+
+# Set the environment variable for the Next.js application
+# This variable becomes available during the build process
+ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
+
+# Build the Next.js application for production
+# This compiles the application and generates optimized production files
+RUN npm run build
+
+
+# ---------- Stage 3: Production runtime ----------
+
+# Use a lightweight Node.js Alpine image for the final production container
+FROM node:20-alpine AS runner
+
+# Set the working directory for the running application
+WORKDIR /app
+
+# Set the environment to production mode
+# This improves performance and disables development features
+ENV NODE_ENV=production
+
+# Create a non-root group for security purposes
+RUN addgroup -S appgroup
+
+# Create a non-root user and assign it to the group
+# Running containers as non-root improves security
+RUN adduser -S appuser -G appgroup
+
+# Copy the compiled Next.js build output from the builder stage
+COPY --from=builder /app/.next ./.next
+
+# Copy the public static assets such as images and fonts
+COPY --from=builder /app/public ./public
+
+# Copy the package.json file required to run the application
+COPY --from=builder /app/package.json ./package.json
+
+# Copy installed Node.js dependencies required at runtime
+COPY --from=builder /app/node_modules ./node_modules
+
+# Change ownership of application files to the non-root user
+# This ensures the application user has permission to access files
+RUN chown -R appuser:appgroup /app
+
+# Switch to the non-root user so the application does not run as root
+USER appuser
+
+# Expose port 3000 to allow access to the application
+# Next.js runs on port 3000 by default
+EXPOSE 3000
+
+# Set the startup command for the container
+# npm start runs the Next.js production server
+CMD ["npm","start"]
