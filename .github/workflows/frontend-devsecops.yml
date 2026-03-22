@@ -7,10 +7,7 @@ on:
       - main
     paths:
       - 'devops-bootcamp-linker-frontend/**'
-    paths-ignore:
-      - '.github/workflows/**'
-      - '**/*.md'
-
+    
 jobs:
   notify:
     runs-on: ubuntu-latest
