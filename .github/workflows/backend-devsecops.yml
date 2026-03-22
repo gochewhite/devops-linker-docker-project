@@ -1,16 +1,12 @@
 name: Backend DevSecOps Pipeline
 
 on:
-  workflow_dispatch:
   push:
     branches:
       - main
     paths:
-      - 'devops-bootcamp-linker-backend/**'
-    paths-ignore:
-      - '.github/workflows/**'
-      - '**/*.md'
-
+      - "devops-bootcamp-linker-backend/**"
+      
 jobs:
   notify:
     runs-on: ubuntu-latest
