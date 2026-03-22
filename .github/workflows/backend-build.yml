@@ -1,0 +1,120 @@
+name: Backend Docker Build, Scan and Push
+
+on:
+    workflow_dispatch:
+    push:
+        branches: 
+            - main
+        paths-ignore:
+            - ".github/workflows/**"
+            - "**/*.md"
+
+env:
+  DOCKER_REPO: whiteobah
+  IMAGE_NAME: whiteobah/devops-bootcamp-linker-backend:latest
+  BACKEND_PORT: 3001
+
+jobs:
+  build-scan-push:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      # -------------------------------
+      # Step 0: Notify Slack that build started
+      # -------------------------------
+      - name: Slack Notification (Start)
+        uses: rtCamp/action-slack-notify@v2
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+          SLACK_TITLE: "Backend Docker Build Started"
+          SLACK_MESSAGE: |
+            Build triggered by ${{ github.actor }} for repository ${{ github.repository }}
+            Branch: ${{ github.ref_name }}
+
+      # -------------------------------
+      # Step 1: Checkout backend repository
+      # -------------------------------
+      - name: Checkout backend repository
+        uses: actions/checkout@v4
+
+      # -------------------------------
+      # Step 2: Setup Docker Buildx
+      # -------------------------------
+      - name: Setup Docker
+        uses: docker/setup-buildx-action@v3
+
+      # -------------------------------
+      # Step 3: Docker Hub Login
+      # -------------------------------
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ env.DOCKER_REPO }}
+          password: ${{ secrets.DOCKER_TOKEN }}
+
+      # -------------------------------
+      # Step 4: Generate Docker Image Tag
+      # -------------------------------
+      - name: Generate Docker Image Tag
+        id: tag
+        uses: docker/metadata-action@v5
+        with:
+          images: docker.io/${{ env.DOCKER_REPO }}/${{ env.IMAGE_NAME }}
+          tags: type=sha,format=short
+
+      # -------------------------------
+      # Step 5: Build Docker Image
+      # -------------------------------
+      - name: Build Docker Image
+        uses: docker/build-push-action@v5
+        with:
+          context: devops-bootcamp-linker-backend
+          load: true
+          tags: ${{ steps.tag.outputs.tags }}
+          build-args: |
+            BACKEND_PORT=${{ env.BACKEND_PORT }}
+
+      # -------------------------------
+      # Step 6: Scan Docker Image
+      # -------------------------------
+      - name: Scan Docker Image for Vulnerabilities
+        run: |
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
+          trivy image --format table --exit-code 1 --ignore-unfixed --severity CRITICAL,HIGH "${{ steps.tag.outputs.tags }}" | tee trivy-report.txt
+
+      # -------------------------------
+      # Step 7: Upload Trivy Report
+      # -------------------------------
+      - name: Upload Scan Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: backend-trivy-report
+          path: trivy-report.txt
+
+      # -------------------------------
+      # Step 8: Push Docker Image
+      # -------------------------------
+      - name: Push Image to Docker Hub
+        uses: docker/build-push-action@v5
+        with:
+          context: devops-bootcamp-linker-backend
+          push: true
+          tags: ${{ steps.tag.outputs.tags }}
+
+      # -------------------------------
+      # Step 9: Slack Notification (Success/Failure)
+      # -------------------------------
+      - name: Slack Notification (Final)
+        if: always()
+        uses: rtCamp/action-slack-notify@v2
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+          SLACK_COLOR: ${{ job.status }}
+          SLACK_MESSAGE: |
+            Backend Docker Build pipeline *${{ job.status }}*.
+            
+            Actor: ${{ github.actor }}
+            Repository: ${{ github.repository }}
+            Branch: ${{ github.ref_name }}
+            Logs: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
