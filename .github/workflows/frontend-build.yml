@@ -84,7 +84,8 @@ jobs:
             - name: Build Docker Image
               uses: docker/build-push-action@v5
               with:
-                context: .
+                context: devops-bootcamp-linker-frontend   # point to the folder
+                file: devops-bootcamp-linker-frontend/Dockerfile  # explicitly
                 load: true
                 tags: ${{ steps.tag.outputs.tags }}
                 build-args: |
