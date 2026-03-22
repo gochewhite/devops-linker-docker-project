@@ -41,7 +41,7 @@ jobs:
         working-directory: devops-bootcamp-linker-frontend
 
       - name: Run ESLint
-        run: npx next lint .
+        run: npx next lint --dir .
         working-directory: devops-bootcamp-linker-frontend
 
   sca:
