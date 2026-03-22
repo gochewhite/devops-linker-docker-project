@@ -11,7 +11,7 @@ on:
 
 env:
   DOCKER_REPO: whiteobah
-  IMAGE_NAME: whiteobah/devops-bootcamp-linker-frontend:latest
+  IMAGE_NAME: devops-bootcamp-linker-frontend
   NEXT_PUBLIC_API_URL: "http://localhost:3001"
 
 # -------------------------------------------------

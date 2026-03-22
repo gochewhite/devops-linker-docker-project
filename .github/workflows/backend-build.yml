@@ -11,7 +11,7 @@ on:
 
 env:
   DOCKER_REPO: whiteobah
-  IMAGE_NAME: whiteobah/devops-bootcamp-linker-backend:latest
+  IMAGE_NAME: devops-bootcamp-linker-backend
   BACKEND_PORT: 3001
 
 jobs:
