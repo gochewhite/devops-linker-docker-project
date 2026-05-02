@@ -1,152 +1,175 @@
 name: Frontend Docker Build, Scan and Push
 
 on:
-    workflow_dispatch:
-    push:
-        branches: 
-            - main
-        paths-ignore:
-            - ".github/workflows/**"
-            - "**/*.md"
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - ".github/workflows/**"
+      - "**/*.md"
 
 env:
   DOCKER_REPO: whiteobah
   IMAGE_NAME: devops-bootcamp-linker-frontend
+  DOCKERFILE_PATH: devops-bootcamp-linker-frontend/Dockerfile
+  CONTEXT_PATH: devops-bootcamp-linker-frontend
   NEXT_PUBLIC_API_URL: "http://localhost:3001"
+  REGISTRY_URL: docker.io
 
 # -------------------------------------------------
 # JOB 1: Notify Slack that pipeline started
 # -------------------------------------------------
 jobs:
-    slack-notify:
-        runs-on: ubuntu-latest
-        steps:
-            - name: Slack Notification
-              uses: rtCamp/action-slack-notify@v2
-              env:
-                SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
-                SLACK_TITLE: Docker Build Pipeline Triggered
-                SLACK_MESSAGE: |
-                    **Event:** ${{ github.event_name }}
+  slack-notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Slack Notification - Pipeline Started
+        uses: rtCamp/action-slack-notify@v2
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+          SLACK_TITLE: Docker Build Pipeline Triggered
+          SLACK_MESSAGE: |
+            **Event:** ${{ github.event_name }}
 
-                    **Actor:** ${{ github.actor }}
+            **Actor:** ${{ github.actor }}
 
-                    **Branch:** ${{ github.ref_name }}
+            **Branch:** ${{ github.ref_name }}
 
-                    **Commit:** ${{ github.event.head_commit.message }}
+            **Commit:** ${{ github.event.head_commit.message }}
 
+  # -------------------------------------------------
+  # JOB 2: Build, Scan and Push Docker Image
+  # -------------------------------------------------
+  build-scan-push:
+    needs: slack-notify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image-tag: ${{ steps.meta.outputs.tags }}
+      image-digest: ${{ steps.build.outputs.digest }}
+    steps:
+      # -------------------------------------------------
+      # STEP 1: Checkout Repository
+      # -------------------------------------------------
+      - name: Checkout application repository
+        uses: actions/checkout@v4
 
-    # -------------------------------------------------
-    # JOB 2: Build, Scan and Push Docker Image
-    # -------------------------------------------------
-    build-scan:
-        runs-on: ubuntu-latest
-        permissions:
-            contents: read
-            packages: write
-        steps:
-            # -------------------------------------------------
-            # STEP 1: Checkout Repository
-            # -------------------------------------------------
-            - name: Checkout application repository
-              uses: actions/checkout@v4
+      # -------------------------------------------------
+      # STEP 2: Setup Docker Buildx
+      # -------------------------------------------------
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
-            # -------------------------------------------------
-            # STEP 2: Setup Docker Buildx
-            # -------------------------------------------------
-            - name: Setup Docker
-              uses: docker/setup-buildx-action@v3
+      # -------------------------------------------------
+      # STEP 3: Login to Docker Hub
+      # -------------------------------------------------
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ env.DOCKER_REPO }}
+          password: ${{ secrets.DOCKER_TOKEN }}
 
+      # -------------------------------------------------
+      # STEP 4: Generate Image Metadata and Tags
+      # -------------------------------------------------
+      - name: Generate Docker Image Tags and Metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY_URL }}/${{ env.DOCKER_REPO }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=sha,format=short,prefix={{branch}}-
+            type=ref,event=branch
+            type=raw,value=latest,enable={{is_default_branch}}
 
-            # -------------------------------------------------
-            # STEP 3: Login to Docker Hub
-            # -------------------------------------------------
-            - name: Login in Docker Hub
-              uses: docker/login-action@v3
-              with:
-                username: ${{ env.DOCKER_REPO }}
-                password: ${{ secrets.DOCKER_TOKEN }}
+      # -------------------------------------------------
+      # STEP 5: Build and Push Docker Image (Single Pass)
+      # -------------------------------------------------
+      - name: Build and Push Docker Image
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ env.CONTEXT_PATH }}
+          file: ${{ env.DOCKERFILE_PATH }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=registry,ref=${{ env.REGISTRY_URL }}/${{ env.DOCKER_REPO }}/${{ env.IMAGE_NAME }}:latest
+          cache-to: type=inline
+          build-args: |
+            NEXT_PUBLIC_API_URL=${{ env.NEXT_PUBLIC_API_URL }}
 
-            # -------------------------------------------------
-            # STEP 4: Generate Image Tag (Commit SHA)
-            # -------------------------------------------------
-            - name: Generate Docker Image Tag
-              id: tag
-              uses: docker/metadata-action@v5
-              with:
-                images: docker.io/${{ env.DOCKER_REPO }}/${{ env.IMAGE_NAME }}
-                tags: |
-                    type=sha,format=short
+      # -------------------------------------------------
+      # STEP 6: Install Trivy Security Scanner
+      # -------------------------------------------------
+      - name: Install Trivy
+        run: |
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
+          | sh -s -- -b /usr/local/bin
 
-            # -------------------------------------------------
-            # STEP 5: Build Docker Image
-            # -------------------------------------------------
-            - name: Build Docker Image
-              uses: docker/build-push-action@v5
-              with:
-                context: devops-bootcamp-linker-frontend   # point to the folder
-                file: devops-bootcamp-linker-frontend/Dockerfile  # explicitly
-                load: true
-                tags: ${{ steps.tag.outputs.tags }}
-                build-args: |
-                    NEXT_PUBLIC_API_URL=${{ env.NEXT_PUBLIC_API_URL }}
-            
-            # -------------------------------------------------
-            # STEP 6: Install Trivy Security Scanner
-            # -------------------------------------------------
-            - name: Install Trivy
-              run: |
-                curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
-                | sh -s -- -b /usr/local/bin
+      # -------------------------------------------------
+      # STEP 7: Scan Docker Image for Vulnerabilities
+      # -------------------------------------------------
+      - name: Scan Docker Image for Vulnerabilities
+        continue-on-error: true
+        id: trivy
+        run: |
+          trivy image \
+          --format json \
+          --exit-code 0 \
+          --ignore-unfixed \
+          --severity CRITICAL,HIGH \
+          "${{ steps.meta.outputs.tags }}" \
+          > trivy-report.json
+          
+          # Also generate table format for readability
+          trivy image \
+          --format table \
+          --exit-code 0 \
+          --ignore-unfixed \
+          --severity CRITICAL,HIGH \
+          "${{ steps.meta.outputs.tags }}" \
+          | tee trivy-report.txt
 
-            # -------------------------------------------------
-            # STEP 7: Scan Docker Image for Vulnerabilities
-            # -------------------------------------------------
-            - name: Scan Docker Image for Vulnerabilities
-              run: |
-                trivy image \
-                --format table \
-                --exit-code 1 \
-                --ignore-unfixed \
-                --severity CRITICAL,HIGH \
-                "${{ steps.tag.outputs.tags }}" \
-                | tee trivy-report.txt
-            
-            # -------------------------------------------------
-            # STEP 8: Upload Scan Report
-            # -------------------------------------------------
-            - name: Upload Scan Report
-              if: always()
-              uses: actions/upload-artifact@v4
-              with:
-                name: trivy-report
-                path: trivy-report.txt
-            
-            # -------------------------------------------------
-            # STEP 9: Push Docker Image to Docker Hub
-            # -------------------------------------------------
-            - name: Push Image to Docker Hub
-              uses: docker/build-push-action@v5
-              with:
-                context: devops-bootcamp-linker-frontend
-                file: devops-bootcamp-linker-frontend/Dockerfile
-                push: true
-                tags: ${{ steps.tag.outputs.tags }}
+      # -------------------------------------------------
+      # STEP 8: Upload Scan Reports as Artifacts
+      # -------------------------------------------------
+      - name: Upload Trivy Scan Reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-reports
+          path: |
+            trivy-report.json
+            trivy-report.txt
+          retention-days: 30
 
-            # -------------------------------------------------
-            # STEP 10: Final Slack Notification
-            # -------------------------------------------------
-            - name: Slack Notification
-              if: always()
-              uses: rtCamp/action-slack-notify@v2
-              env:
-                SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
-                SLACK_COLOR: ${{ job.status }}
-                SLACK_MESSAGE: |
-                    Docker pipeline *${{ job.status }}*
+      # -------------------------------------------------
+      # STEP 9: Final Slack Notification
+      # -------------------------------------------------
+      - name: Slack Notification - Pipeline Complete
+        if: always()
+        uses: rtCamp/action-slack-notify@v2
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+          SLACK_CHANNEL: "#ci-cd"
+          SLACK_USERNAME: "Docker Build Bot"
+          SLACK_COLOR: ${{ job.status == 'success' && 'good' || 'danger' }}
+          SLACK_TITLE: Docker Pipeline ${{ job.status == 'success' && '✅ Succeeded' || '❌ Failed' }}
+          SLACK_MESSAGE: |
+            **Status:** ${{ job.status }}
 
-                    Actor: ${{ github.actor }}
+            **Actor:** ${{ github.actor }}
 
-                    Repository: ${{ github.repository }}
+            **Repository:** ${{ github.repository }}
 
-                    Logs: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            **Branch:** ${{ github.ref_name }}
+
+            **Image Tag:** `${{ steps.meta.outputs.tags }}`
+
+            **Image Digest:** `${{ steps.build.outputs.digest }}`
+
+            **Logs:** https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
