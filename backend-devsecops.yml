@@ -1,0 +1,134 @@
+name: Backend DevSecOps Pipeline
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "devops-bootcamp-linker-backend/**"
+
+jobs:
+  lint:
+    name: Lint Code
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          clean: true
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.x'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Get changed files
+        id: changed-files
+        uses: tj-actions/changed-files@v42
+        with:
+          files: |
+            **/*.js
+            **/*.jsx
+            **/*.ts
+            **/*.tsx
+
+      - name: Run ESLint on changed files
+        if: steps.changed-files.outputs.any_changed == 'true'
+        run: npx eslint ${{ steps.changed-files.outputs.all_changed_files }} --max-warnings=0
+
+      - name: Skip lint (no changed files)
+        if: steps.changed-files.outputs.any_changed != 'true'
+        run: echo "No JS/TS files changed, skipping lint."
+
+  sca:
+    name: Software Composition Analysis
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.x'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Run NPM audit
+        run: npm audit --json | tee npm-audit-report.json | jq -e 'select(.type=="auditSummary") | select(.data.vulnerabilities.moderate == 0 and .data.vulnerabilities.high == 0 and .data.vulnerabilities.critical == 0)'
+
+      - name: Upload SCA Reports
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sca-reports
+          path: |
+            reports
+            npm-audit-report.json
+
+  sast:
+    name: semgrep/ci
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    container:
+      image: semgrep/semgrep
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run semgrep
+        run: semgrep scan --error --json-output=semgrep-results.json
+        env:
+          SEMGREP_APP_TOKEN: ${{ secrets.SEMGREP_APP_TOKEN }}
+
+      - name: Upload SARIF Report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: semgrep-report
+          path: semgrep-results.json
+
+      - name: Send Slack Notification
+        if: always()
+        uses: rtCamp/action-slack-notify@v2
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+          SLACK_COLOR: ${{ job.status }}
+          SLACK_TITLE: DevSecOps API Pipeline
+          SLACK_MESSAGE: |
+            Pipeline Status: ${{ job.status }}
+            Repository: ${{ github.repository }}
+            Branch: ${{ github.ref_name }}
+            Actor: ${{ github.actor }}
+
+            Get DevSecOps Reports: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          MSG_MINIMAL: true
+          SLACKIFY_MARKDOWN: true
+
+  notify:
+    name: Notify on Completion
+    if: always()
+    needs: [lint, sca, sast]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send Slack Notification
+        uses: rtCamp/action-slack-notify@v2
+        env:
+          SLACK_CHANNEL: github-notifications
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+          SLACK_MESSAGE: |
+            **Event**: DevSecOps Pipeline Completed
+            **Repository**: ${{ github.repository }}
+            **Branch**: ${{ github.ref_name }}
+            **Commit**: ${{ github.event.head_commit.id }}
+            **Author**: ${{ github.actor }}
+            **Status**: ${{ needs.sast.result }}
+          SLACK_TITLE: DevSecOps Pipeline Summary
+          MSG_MINIMAL: true
+          SLACKIFY_MARKDOWN: true
